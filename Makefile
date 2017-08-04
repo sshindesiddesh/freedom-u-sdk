@@ -1,3 +1,5 @@
+.SECONDARY:
+
 RISCV ?= $(CURDIR)/toolchain
 PATH := $(RISCV)/bin:$(PATH)
 
@@ -20,25 +22,34 @@ sysroot := $(wrkdir)/sysroot
 linux_srcdir := $(srcdir)/linux
 linux_wrkdir := $(wrkdir)/linux
 linux_defconfig := $(confdir)/linux_defconfig
-linux_release := linux-4.6.2.tar.xz
-linux_url := ftp://ftp.kernel.org/pub/linux/kernel/v4.x
 
 vmlinux := $(linux_wrkdir)/vmlinux
 vmlinux_stripped := $(linux_wrkdir)/vmlinux-stripped
 
 pk_srcdir := $(srcdir)/riscv-pk
 pk_wrkdir := $(wrkdir)/riscv-pk
-bbl := $(pk_wrkdir)/bbl
-bin := $(wrkdir)/bbl.bin
-hex := $(wrkdir)/bbl.hex
+spike_bbl := $(pk_wrkdir)/spike/bbl
+spike_bin := $(pk_wrkdir)/spike/bbl.bin
+spike_hex := $(pk_wrkdir)/spike/bbl.hex
+vc707_bbl := $(pk_wrkdir)/sifive-vc707-devkit/bbl
+vc707_bin := $(pk_wrkdir)/sifive-vc707-devkit/bbl.bin
+vc707_hex := $(pk_wrkdir)/sifive-vc707-devkit/bbl.hex
+
+fesvr_srcdir := $(srcdir)/riscv-fesvr
+fesvr_wrkdir := $(wrkdir)/riscv-fesvr
+libfesvr := $(fesvr_wrkdir)/prefix/lib/libfesvr.so
+
+spike_srcdir := $(srcdir)/riscv-isa-sim
+spike_wrkdir := $(wrkdir)/riscv-isa-sim
+spike := $(spike_wrkdir)/prefix/bin/spike
 
 target := riscv64-unknown-linux-gnu
 
 .PHONY: all
-all: $(hex)
+all: $(vc707_bin)
 	@echo
-	@echo Find the SD-card image in work/bbl.bin
-	@echo Program it with: dd if=work/bbl.bin of=/dev/sd-your-card bs=1M
+	@echo Find the SD-card image in $<
+	@echo Program it with: dd if=$< of=/dev/sd-your-card bs=1M
 	@echo
 
 $(toolchain_dest)/bin/$(target)-gcc: $(toolchain_srcdir)
@@ -57,51 +68,83 @@ buildroot-menuconfig: $(buildroot_srcdir)
 $(sysroot_stamp): $(buildroot_tar)
 	mkdir -p $(sysroot)
 	tar -xpf $< -C $(sysroot) --exclude ./dev --exclude ./usr/share/locale
-	touch $@
+	date > $@
 
-$(linux_release):
-	curl -O $(linux_url)/$(linux_release)
-
-$(linux_wrkdir)/.config: $(linux_defconfig) $(linux_srcdir) $(linux_release)
+$(linux_wrkdir)/.config: $(linux_defconfig) $(linux_srcdir)
 	mkdir -p $(dir $@)
 	cp -p $< $@
-	cd $(linux_srcdir); tar --strip-components=1 -xJf ../$(linux_release); git checkout .gitignore arch/.gitignore
 	$(MAKE) -C $(linux_srcdir) O=$(linux_wrkdir) ARCH=riscv olddefconfig
+	touch -c $@
 
 $(vmlinux): $(linux_srcdir) $(linux_wrkdir)/.config $(sysroot_stamp)
 	$(MAKE) -C $< O=$(linux_wrkdir) \
+		CROSS_COMPILE=$(target)- \
 		CONFIG_INITRAMFS_SOURCE="$(confdir)/initramfs.txt $(sysroot)" \
 		CONFIG_INITRAMFS_ROOT_UID=$(shell id -u) \
 		CONFIG_INITRAMFS_ROOT_GID=$(shell id -g) \
 		ARCH=riscv \
 		vmlinux
+	touch -c $@
 
 $(vmlinux_stripped): $(vmlinux)
 	$(target)-strip -o $@ $<
+	touch -c $@
 
 .PHONY: linux-menuconfig
 linux-menuconfig: $(linux_wrkdir)/.config
 	$(MAKE) -C $(linux_srcdir) O=$(dir $<) ARCH=riscv menuconfig savedefconfig
 
-$(bbl): $(pk_srcdir) $(vmlinux_stripped)
-	rm -rf $(pk_wrkdir)
-	mkdir -p $(pk_wrkdir)
-	cd $(pk_wrkdir) && $</configure \
+%/bbl: $(pk_srcdir) $(vmlinux_stripped)
+	rm -rf $(dir $@)
+	mkdir -p $(dir $@)
+	cd $(dir $@) && $</configure \
 		--host=$(target) \
-		--with-payload=$(vmlinux_stripped)
-	$(MAKE) -C $(pk_wrkdir)
+		--with-payload=$(vmlinux_stripped) \
+		--with-platform=$(lastword $(subst /, ,$(dir $@))) \
+		--enable-logo \
+		--enable-print-device-tree
+	$(MAKE) -C $(dir $@)
+	touch -c $@
 
-$(bin): $(bbl)
+%/bbl.bin: %/bbl
 	$(target)-objcopy -S -O binary --change-addresses -0x80000000 $< $@
+	touch -c $@
 
-$(hex):	$(bin)
+%/bbl.hex: %/bbl.bin
 	xxd -c1 -p $< > $@
+	touch -c $@
 
-.PHONY: sysroot vmlinux bbl
+$(libfesvr): $(fesvr_srcdir)
+	rm -rf $(fesvr_wrkdir)
+	mkdir -p $(fesvr_wrkdir)
+	mkdir -p $(dir $@)
+	cd $(fesvr_wrkdir) && $</configure \
+		--prefix=$(dir $(abspath $(dir $@)))
+	$(MAKE) -C $(fesvr_wrkdir)
+	$(MAKE) -C $(fesvr_wrkdir) install
+	touch -c $@
+
+$(spike): $(spike_srcdir) $(libfesvr)
+	rm -rf $(spike_wrkdir)
+	mkdir -p $(spike_wrkdir)
+	mkdir -p $(dir $@)
+	cd $(spike_wrkdir) && $</configure \
+		--prefix=$(dir $(abspath $(dir $@))) \
+		--with-fesvr=$(dir $(abspath $(dir $(libfesvr))))
+	$(MAKE) -C $(spike_wrkdir)
+	$(MAKE) -C $(spike_wrkdir) install
+	touch -c $@
+
+.PHONY: sysroot vmlinux bbl spike
 sysroot: $(sysroot)
 vmlinux: $(vmlinux)
-bbl: $(bbl)
+bbl: $(spike_bbl) $(vc707_bbl)
+spike: $(spike)
 
 .PHONY: clean
 clean:
 	rm -rf -- $(wrkdir) $(toolchain_dest)
+
+.PHONY: sim
+sim: $(spike) $(spike_bbl)
+	$(spike) -p4 $(spike_bbl)
