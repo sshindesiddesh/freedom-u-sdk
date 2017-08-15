@@ -101,8 +101,7 @@ linux-menuconfig: $(linux_wrkdir)/.config
 		--host=$(target) \
 		--with-payload=$(vmlinux_stripped) \
 		--with-platform=$(lastword $(subst /, ,$(dir $@))) \
-		--enable-logo \
-		--enable-print-device-tree
+		--enable-logo
 	$(MAKE) -C $(dir $@)
 	touch -c $@
 
