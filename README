@@ -1,0 +1,27 @@
+To Get Started:
+
+git clone https://github.com/sshindesiddesh/freedom-u-sdk.git
+cd freedom-u-sdk
+git reset --hard b38f7c98
+git submodule update --init --recursive
+
+Patch the Makefile.in in riscv-pk repository with the following patch
+
+diff --git a/Makefile.in b/Makefile.in
+index f885b30..8babada 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -84,7 +84,7 @@ VPATH := $(addprefix $(src_dir)/, $(sprojs_enabled))
+ #  - CXXFLAGS : flags for C++ compiler (eg. -Wall,-g,-O3)
+
+ CC            := @CC@
+-CFLAGS        := @CFLAGS@ $(CFLAGS) -DBBL_PAYLOAD=\"$(bbl_payload)\" -mno-float
++CFLAGS        := @CFLAGS@ $(CFLAGS) -DBBL_PAYLOAD=\"$(bbl_payload)\"
+ COMPILE       := $(CC) -MMD -MP $(CFLAGS) \
+                  $(sprojs_include)
+ # Linker
+
+E.g. command : patch -p1 < Makefile.in.patch
+
+cd fredom-u-sdk
+make -j4
